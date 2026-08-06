@@ -10,7 +10,7 @@ N_FOLDS = 5
 # ---------------------------------------------------------------------------
 # 1. Load raw + replay cleaning 
 # ---------------------------------------------------------------------------
-df = pd.read_csv("data/mercari_sample.csv")
+df = pd.read_csv("data/raw/mercari_sample.csv")
 
 df["brand_name"] = df["brand_name"].fillna("No Brand").str.lower().str.strip()
 df = df.dropna(subset=["category_name"])
