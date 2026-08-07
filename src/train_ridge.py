@@ -43,3 +43,20 @@ for alpha in [0.1, 1.0, 5.0, 20.0, 50.0]:
     model.fit(X_train, y_train)
     rmsle = np.sqrt(mean_squared_error(y_val, model.predict(X_val)))
     print(f"alpha={alpha:<6} val RMSLE={rmsle:.4f}")
+
+
+# --- lock in the winning alpha as the final model ---
+
+ridge = Ridge(alpha=5.0, random_state=42)
+ridge.fit(X_train, y_train)
+
+# --- Persist trained artifacts so the notebook doesn't need to refit ---
+import joblib 
+import os
+
+os.makedirs("models", exist_ok=True)
+joblib.dump(name_vec, "models/name_vectorizer.joblib")
+joblib.dump(desc_vec, "models/desc_vectorizer.joblib")
+joblib.dump(scaler, "models/scaler.joblib")
+joblib.dump(ohe, "models/onehot_encoder.joblib")
+joblib.dump(ridge, "models/ridge_baseline.joblib")
