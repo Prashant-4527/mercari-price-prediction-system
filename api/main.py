@@ -5,6 +5,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 from typing import Optional
 from src.feature_engineering import engineer_raw_features
+from src.pipeline_components import fillna_text, fillna_cat, LeakSafeTargetEncoder
+
 
 app = FastAPI(title="Mercari Price Prediction API")
 
