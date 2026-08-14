@@ -28,13 +28,28 @@ class ListingInput(BaseModel):
     item_description: Optional[str] = Field(default=None, description="Listing description")
 
 
+
+from src.interval_utils import get_prediction_interval
+
+# Loaded once at startup -- same pattern as the model pipeline
+interval_lookup = joblib.load("models/interval_lookup.joblib")
+
+
 @app.post("/predict")
 def predict_price(listing: ListingInput):
     raw_df = pd.DataFrame([listing.model_dump()])
-    raw_df["price"] = 0  # placeholder only -- transform() never reads this, only fit() did (Day 10)
+    raw_df["price"] = 0
 
     engineered_df = engineer_raw_features(raw_df)
     pred_log = pipeline.predict(engineered_df)[0]
     pred_price = float(np.expm1(pred_log))
 
-    return {"predicted_price": round(pred_price, 2)}
+    lower, upper = get_prediction_interval(
+        pred_log, interval_lookup["bin_edges"], interval_lookup["bin_bounds"]
+    )
+
+    return {
+        "predicted_price": round(pred_price, 2),
+        "price_range_low": round(lower, 2),
+        "price_range_high": round(upper, 2)
+    }
