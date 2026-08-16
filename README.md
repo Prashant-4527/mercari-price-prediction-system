@@ -11,8 +11,12 @@
 [![Docker](https://img.shields.io/badge/Docker-multi--stage-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 [![Tests](https://github.com/Prashant-4527/mercari-price-prediction-system/actions/workflows/ci.yml/badge.svg)](https://github.com/Prashant-4527/mercari-price-prediction-system/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Linting: ruff](https://img.shields.io/badge/lint-ruff-D7FF64)](https://github.com/astral-sh/ruff)
 
 [Overview](#overview) · [How It Predicts a Price](#how-it-actually-predicts-a-price) · [Architecture](#system-architecture) · [Getting Started](#getting-started) · [Results](#model-performance) · [Limitations](#known-limitations--roadmap)
+
+**🔗 [Live demo](https://YOUR-APP.streamlit.app) · [API docs](https://YOUR-API.onrender.com/docs)** — replace with your deployed URLs (see [Deployment](#deployment))
 
 </div>
 
@@ -39,6 +43,7 @@ Trained model artifacts ship with the repository — no dataset or training step
 - [Project Structure](#project-structure)
 - [Tech Stack](#tech-stack)
 - [Getting Started](#getting-started)
+- [Deployment](#deployment)
 - [API Usage](#api-usage)
 - [Model Performance](#model-performance)
 - [Error Analysis & Interpretability](#error-analysis--interpretability)
@@ -286,6 +291,24 @@ jupyter notebook notebooks/error_analysis.ipynb  # builds the prediction-interva
 
 ---
 
+## Deployment
+
+Both serving surfaces are stateless and load the trained pipeline once at startup, so either deploys as-is with no code changes.
+
+**Streamlit demo → [Streamlit Community Cloud](https://streamlit.io/cloud) (free)**
+1. Sign in with GitHub, click "New app"
+2. Repository: this repo · Branch: `main` · Main file path: `streamlit_app/app.py`
+3. Deploy — dependencies are picked up automatically from `streamlit_app/requirements.txt`
+
+**FastAPI → [Render](https://render.com) (free tier) using the existing `Dockerfile`**
+1. New → Web Service → connect this repo
+2. Render detects `render.yaml` automatically (or manually set: Runtime = Docker, Health Check Path = `/health`)
+3. Deploy — the same multi-stage `Dockerfile` used for local Docker runs is what ships to production, so there's no local/prod drift
+
+Any other Dockerfile-based host (Railway, Fly.io, Google Cloud Run) works the same way with no changes.
+
+---
+
 ## API Usage
 
 | Endpoint | Method | Description |
@@ -354,6 +377,8 @@ On equal footing, both tree ensembles beat linear regression — the expected re
 | **Ridge (shipped)** | **10 structured + TF-IDF name (5K) + TF-IDF description (20K) = 25,759 dims** | **0.5214** |
 
 Once the listing's **name** and **description** are vectorized and handed to Ridge, it leapfrogs both tree ensembles — free text carries pricing signal (brand mentions, materials, size, condition language) that the ten structured features alone don't capture. It isn't that Ridge is inherently the stronger model here — in this comparison it's the only one of the three evaluated with the listing text included. Feeding the same TF-IDF features into LightGBM/XGBoost is a natural next experiment (see [Roadmap](#known-limitations--roadmap)).
+
+> **Note on rigor:** 0.5214 is a single-split number, unlike the CV numbers reported for the structured-only candidates above — TF-IDF refitting per fold makes 5-fold CV on the full 25,759-dim pipeline noticeably slower, which is why it wasn't run initially. `scripts/cross_validate_final_model.py` reconstructs the exact shipped architecture and reports 5-fold CV RMSLE ± std for it, so this can be put on the same footing on request.
 
 ---
 
@@ -445,7 +470,9 @@ pytest tests/ -v
 # ============================= 14 passed in 1.69s ==============================
 ```
 
-GitHub Actions (`.github/workflows/ci.yml`) runs the full suite on every push and pull request to `main`, on Python 3.11.
+GitHub Actions (`.github/workflows/ci.yml`) runs two jobs on every push and pull request to `main`, on Python 3.11:
+- **`test`** — the pytest suite above
+- **`lint`** — [`ruff`](https://github.com/astral-sh/ruff) (imports, unused code, style) and [`black --check`](https://github.com/psf/black) (formatting), config in `pyproject.toml`
 
 ---
 

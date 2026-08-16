@@ -28,15 +28,29 @@ def engineer_raw_features(df):
 
 
 if __name__ == "__main__":
-    sample_raw = pd.DataFrame([{
-        "name": "Chanel Classic Flag Bag medium Caviar L",
-        "item_condition_id": 3,
-        "category_name": "Women/Bags/Shoulder Bag",
-        "brand_name": "Chanel",
-        "shipping": 0,
-        "item_description": "Barely used, comes with dust bag"
-    }])
+    sample_raw = pd.DataFrame(
+        [
+            {
+                "name": "Chanel Classic Flag Bag medium Caviar L",
+                "item_condition_id": 3,
+                "category_name": "Women/Bags/Shoulder Bag",
+                "brand_name": "Chanel",
+                "shipping": 0,
+                "item_description": "Barely used, comes with dust bag",
+            }
+        ]
+    )
 
     engineered = engineer_raw_features(sample_raw)
-    print(engineered[["main_category", "sub_category", "sub_sub_category",
-                       "condition_label", "name_length", "desc_length"]])
+    print(
+        engineered[
+            [
+                "main_category",
+                "sub_category",
+                "sub_sub_category",
+                "condition_label",
+                "name_length",
+                "desc_length",
+            ]
+        ]
+    )

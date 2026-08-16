@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+
 from api.main import app
 
 client = TestClient(app)
@@ -8,10 +9,12 @@ def test_unseen_brand_does_not_crash():
     """Day 1/10: brands never seen in training should fall back to the global mean,
     not crash -- this is the exact leak-safe encoding behavior we built."""
     payload = {
-        "name": "Mystery Item", "item_condition_id": 3,
+        "name": "Mystery Item",
+        "item_condition_id": 3,
         "category_name": "Women/Bags/Shoulder Bag",
         "brand_name": "TotallyMadeUpBrandXYZ123",
-        "shipping": 0, "item_description": "test"
+        "shipping": 0,
+        "item_description": "test",
     }
     response = client.post("/predict", json=payload)
     assert response.status_code == 200
@@ -22,9 +25,10 @@ def test_unseen_category_does_not_crash():
     """Day 3/6: OneHotEncoder(handle_unknown='ignore') should silently zero-encode
     a category never seen in training, not crash."""
     payload = {
-        "name": "Mystery Item", "item_condition_id": 3,
+        "name": "Mystery Item",
+        "item_condition_id": 3,
         "category_name": "TotallyNewCategory/Nonexistent/Subcategory",
-        "shipping": 0
+        "shipping": 0,
     }
     response = client.post("/predict", json=payload)
     assert response.status_code == 200
@@ -52,9 +56,11 @@ def test_empty_string_description():
     """An empty string differs from a missing field -- confirm it's handled
     like 'no description', not a crash on empty text."""
     payload = {
-        "name": "Test Item", "item_condition_id": 3,
-        "category_name": "Electronics/Phones", "shipping": 0,
-        "item_description": ""
+        "name": "Test Item",
+        "item_condition_id": 3,
+        "category_name": "Electronics/Phones",
+        "shipping": 0,
+        "item_description": "",
     }
     response = client.post("/predict", json=payload)
     assert response.status_code == 200

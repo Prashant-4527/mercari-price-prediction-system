@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+
 from api.main import app
 
 client = TestClient(app)
@@ -17,7 +18,7 @@ def test_predict_valid_request():
         "category_name": "Women/Bags/Shoulder Bag",
         "brand_name": "Chanel",
         "shipping": 0,
-        "item_description": "Barely used, comes with dust bag"
+        "item_description": "Barely used, comes with dust bag",
     }
     response = client.post("/predict", json=payload)
     assert response.status_code == 200
@@ -30,8 +31,10 @@ def test_predict_valid_request():
 
 def test_predict_invalid_condition_id():
     payload = {
-        "name": "Test Item", "item_condition_id": 47,
-        "category_name": "Women/Bags/Shoulder Bag", "shipping": 0
+        "name": "Test Item",
+        "item_condition_id": 47,
+        "category_name": "Women/Bags/Shoulder Bag",
+        "shipping": 0,
     }
     response = client.post("/predict", json=payload)
     assert response.status_code == 422
@@ -40,7 +43,8 @@ def test_predict_invalid_condition_id():
 def test_predict_missing_required_field():
     payload = {
         "item_condition_id": 3,
-        "category_name": "Women/Bags/Shoulder Bag", "shipping": 0
+        "category_name": "Women/Bags/Shoulder Bag",
+        "shipping": 0,
     }  # "name" missing
     response = client.post("/predict", json=payload)
     assert response.status_code == 422
@@ -48,8 +52,10 @@ def test_predict_missing_required_field():
 
 def test_predict_without_optional_fields():
     payload = {
-        "name": "Generic Item", "item_condition_id": 3,
-        "category_name": "Electronics/Phones", "shipping": 1
+        "name": "Generic Item",
+        "item_condition_id": 3,
+        "category_name": "Electronics/Phones",
+        "shipping": 1,
     }  # brand_name aur item_description dono missing
     response = client.post("/predict", json=payload)
     assert response.status_code == 200

@@ -1,14 +1,15 @@
 import os
+
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split, KFold
+from sklearn.model_selection import KFold, train_test_split
 
 RANDOM_STATE = 42
-SMOOTHING = 10      # shrinkage strength toward global mean for low-count groups
+SMOOTHING = 10  # shrinkage strength toward global mean for low-count groups
 N_FOLDS = 5
 
 # ---------------------------------------------------------------------------
-# 1. Load raw + replay cleaning 
+# 1. Load raw + replay cleaning
 # ---------------------------------------------------------------------------
 df = pd.read_csv("data/raw/mercari_sample.csv")
 
@@ -24,16 +25,16 @@ print(f"[1] Clean shape: {df.shape[0]:,} rows x {df.shape[1]} columns")
 #    zero dependency on price, so these are 100% safe to build pre-split.
 # ---------------------------------------------------------------------------
 cat_split = df["category_name"].str.split("/")
-df["main_category"]    = cat_split.str[0]
-df["sub_category"]     = cat_split.str[1]
+df["main_category"] = cat_split.str[0]
+df["sub_category"] = cat_split.str[1]
 df["sub_sub_category"] = cat_split.str[2]
-df["category_depth"]   = df["category_name"].str.split("/").str.len()
+df["category_depth"] = df["category_name"].str.split("/").str.len()
 
-df["name_length"]     = df["name"].str.len()
-df["desc_length"]     = df["item_description"].str.len()
+df["name_length"] = df["name"].str.len()
+df["desc_length"] = df["item_description"].str.len()
 df["name_word_count"] = df["name"].str.split().str.len()
 df["has_description"] = df["item_description"].ne("No description yet").astype(int)
-df["is_branded"]      = np.where(df["brand_name"] == "no brand", 0, 1)
+df["is_branded"] = np.where(df["brand_name"] == "no brand", 0, 1)
 
 condition_map = {1: "New", 2: "Like New", 3: "Good", 4: "Fair", 5: "Poor"}
 df["condition_label"] = df["item_condition_id"].map(condition_map)
@@ -69,13 +70,24 @@ print(f"[5] Train: {train_df.shape[0]:,} rows | Val: {val_df.shape[0]:,} rows")
 # ---------------------------------------------------------------------------
 global_mean_price = train_df["price"].mean()
 
-def smoothed_group_stats(frame, group_col, target_col="price", m=SMOOTHING, global_mean=global_mean_price):
+
+def smoothed_group_stats(
+    frame, group_col, target_col="price", m=SMOOTHING, global_mean=global_mean_price
+):
     stats = frame.groupby(group_col)[target_col].agg(["mean", "count"])
     stats["smoothed"] = (stats["count"] * stats["mean"] + m * global_mean) / (stats["count"] + m)
     return stats["smoothed"]
 
-def oof_target_encode(train_frame, group_col, target_col="price", n_folds=N_FOLDS,
-                       m=SMOOTHING, global_mean=global_mean_price, random_state=RANDOM_STATE):
+
+def oof_target_encode(
+    train_frame,
+    group_col,
+    target_col="price",
+    n_folds=N_FOLDS,
+    m=SMOOTHING,
+    global_mean=global_mean_price,
+    random_state=RANDOM_STATE,
+):
     oof_encoded = pd.Series(index=train_frame.index, dtype=float)
     kf = KFold(n_splits=n_folds, shuffle=True, random_state=random_state)
     for fold_train_idx, fold_holdout_idx in kf.split(train_frame):
@@ -85,13 +97,14 @@ def oof_target_encode(train_frame, group_col, target_col="price", n_folds=N_FOLD
         oof_encoded.iloc[fold_holdout_idx] = holdout_groups.map(stats_map).fillna(global_mean)
     return oof_encoded
 
-train_df["cat_avg_price"]   = oof_target_encode(train_df, "main_category")
+
+train_df["cat_avg_price"] = oof_target_encode(train_df, "main_category")
 train_df["brand_avg_price"] = oof_target_encode(train_df, "brand_name")
 
-final_cat_map   = smoothed_group_stats(train_df, "main_category")
+final_cat_map = smoothed_group_stats(train_df, "main_category")
 final_brand_map = smoothed_group_stats(train_df, "brand_name")
 
-val_df["cat_avg_price"]   = val_df["main_category"].map(final_cat_map).fillna(global_mean_price)
+val_df["cat_avg_price"] = val_df["main_category"].map(final_cat_map).fillna(global_mean_price)
 val_df["brand_avg_price"] = val_df["brand_name"].map(final_brand_map).fillna(global_mean_price)
 
 print("[6] Leak-safe target encoding done (OOF for train, train-only map for val).")
@@ -118,7 +131,7 @@ print("Val:  ", val_df["price_bin"].value_counts(normalize=True).sort_index().ro
 #     never created here -- we don't even build features we can't use)
 # ---------------------------------------------------------------------------
 y_train = train_df["log_price"].copy()
-y_val   = val_df["log_price"].copy()
+y_val = val_df["log_price"].copy()
 
 # ---------------------------------------------------------------------------
 # 9. Save processed, leak-safe artifacts

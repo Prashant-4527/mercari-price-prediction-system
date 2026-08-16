@@ -1,4 +1,3 @@
-import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 
 
@@ -18,7 +17,9 @@ class LeakSafeTargetEncoder(BaseEstimator, TransformerMixin):
     def fit(self, X, y=None):
         self.global_mean_ = X["price"].mean()
         stats = X.groupby(self.group_col)["price"].agg(["mean", "count"])
-        stats["smoothed"] = (stats["count"] * stats["mean"] + self.smoothing * self.global_mean_) / (stats["count"] + self.smoothing)
+        stats["smoothed"] = (
+            stats["count"] * stats["mean"] + self.smoothing * self.global_mean_
+        ) / (stats["count"] + self.smoothing)
         self.mapping_ = stats["smoothed"]
         return self
 
