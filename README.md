@@ -16,8 +16,7 @@
 
 [Overview](#overview) · [How It Predicts a Price](#how-it-actually-predicts-a-price) · [Architecture](#system-architecture) · [Getting Started](#getting-started) · [Results](#model-performance) · [Limitations](#known-limitations--roadmap)
 
-**🔗 [Live demo](https://YOUR-APP.streamlit.app) · [API docs](https://YOUR-API.onrender.com/docs)** — replace with your deployed URLs (see [Deployment](#deployment))
-
+**🔗 [Live demo](https://mercari-price-prediction-system-ct2v9yu2n6dxz6rlu8ncvu.streamlit.app/)**
 </div>
 
 ---
