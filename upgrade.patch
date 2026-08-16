@@ -1,0 +1,847 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index c14d61a..25870fe 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -7,6 +7,25 @@ on:
+     branches: [main]
+ 
+ jobs:
++  lint:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Set up Python
++        uses: actions/setup-python@v5
++        with:
++          python-version: "3.11"
++
++      - name: Install lint tools
++        run: pip install ruff black
++
++      - name: Ruff check
++        run: ruff check .
++
++      - name: Black check
++        run: black --check .
++
+   test:
+     runs-on: ubuntu-latest
+     steps:
+diff --git a/README.md b/README.md
+index 207bc6b..6d2d7d2 100644
+--- a/README.md
++++ b/README.md
+@@ -11,9 +11,13 @@
+ [![Docker](https://img.shields.io/badge/Docker-multi--stage-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+ [![Tests](https://github.com/Prashant-4527/mercari-price-prediction-system/actions/workflows/ci.yml/badge.svg)](https://github.com/Prashant-4527/mercari-price-prediction-system/actions/workflows/ci.yml)
+ [![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
++[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
++[![Linting: ruff](https://img.shields.io/badge/lint-ruff-D7FF64)](https://github.com/astral-sh/ruff)
+ 
+ [Overview](#overview) · [How It Predicts a Price](#how-it-actually-predicts-a-price) · [Architecture](#system-architecture) · [Getting Started](#getting-started) · [Results](#model-performance) · [Limitations](#known-limitations--roadmap)
+ 
++**🔗 [Live demo](https://YOUR-APP.streamlit.app) · [API docs](https://YOUR-API.onrender.com/docs)** — replace with your deployed URLs (see [Deployment](#deployment))
++
+ </div>
+ 
+ ---
+@@ -39,6 +43,7 @@ Trained model artifacts ship with the repository — no dataset or training step
+ - [Project Structure](#project-structure)
+ - [Tech Stack](#tech-stack)
+ - [Getting Started](#getting-started)
++- [Deployment](#deployment)
+ - [API Usage](#api-usage)
+ - [Model Performance](#model-performance)
+ - [Error Analysis & Interpretability](#error-analysis--interpretability)
+@@ -286,6 +291,24 @@ jupyter notebook notebooks/error_analysis.ipynb  # builds the prediction-interva
+ 
+ ---
+ 
++## Deployment
++
++Both serving surfaces are stateless and load the trained pipeline once at startup, so either deploys as-is with no code changes.
++
++**Streamlit demo → [Streamlit Community Cloud](https://streamlit.io/cloud) (free)**
++1. Sign in with GitHub, click "New app"
++2. Repository: this repo · Branch: `main` · Main file path: `streamlit_app/app.py`
++3. Deploy — dependencies are picked up automatically from `streamlit_app/requirements.txt`
++
++**FastAPI → [Render](https://render.com) (free tier) using the existing `Dockerfile`**
++1. New → Web Service → connect this repo
++2. Render detects `render.yaml` automatically (or manually set: Runtime = Docker, Health Check Path = `/health`)
++3. Deploy — the same multi-stage `Dockerfile` used for local Docker runs is what ships to production, so there's no local/prod drift
++
++Any other Dockerfile-based host (Railway, Fly.io, Google Cloud Run) works the same way with no changes.
++
++---
++
+ ## API Usage
+ 
+ | Endpoint | Method | Description |
+@@ -355,6 +378,8 @@ On equal footing, both tree ensembles beat linear regression — the expected re
+ 
+ Once the listing's **name** and **description** are vectorized and handed to Ridge, it leapfrogs both tree ensembles — free text carries pricing signal (brand mentions, materials, size, condition language) that the ten structured features alone don't capture. It isn't that Ridge is inherently the stronger model here — in this comparison it's the only one of the three evaluated with the listing text included. Feeding the same TF-IDF features into LightGBM/XGBoost is a natural next experiment (see [Roadmap](#known-limitations--roadmap)).
+ 
++> **Note on rigor:** 0.5214 is a single-split number, unlike the CV numbers reported for the structured-only candidates above — TF-IDF refitting per fold makes 5-fold CV on the full 25,759-dim pipeline noticeably slower, which is why it wasn't run initially. `scripts/cross_validate_final_model.py` reconstructs the exact shipped architecture and reports 5-fold CV RMSLE ± std for it, so this can be put on the same footing on request.
++
+ ---
+ 
+ ## Error Analysis & Interpretability
+@@ -445,7 +470,9 @@ pytest tests/ -v
+ # ============================= 14 passed in 1.69s ==============================
+ ```
+ 
+-GitHub Actions (`.github/workflows/ci.yml`) runs the full suite on every push and pull request to `main`, on Python 3.11.
++GitHub Actions (`.github/workflows/ci.yml`) runs two jobs on every push and pull request to `main`, on Python 3.11:
++- **`test`** — the pytest suite above
++- **`lint`** — [`ruff`](https://github.com/astral-sh/ruff) (imports, unused code, style) and [`black --check`](https://github.com/psf/black) (formatting), config in `pyproject.toml`
+ 
+ ---
+ 
+diff --git a/api/main.py b/api/main.py
+index 15c0994..bc9cb42 100644
+--- a/api/main.py
++++ b/api/main.py
+@@ -1,21 +1,26 @@
+-import pandas as pd
+-import numpy as np
+ import joblib
++import numpy as np
++import pandas as pd
+ from fastapi import FastAPI
+ from pydantic import BaseModel, Field
+-from typing import Optional
++
+ from src.feature_engineering import engineer_raw_features
+-from src.pipeline_components import fillna_text, fillna_cat, LeakSafeTargetEncoder
++from src.interval_utils import get_prediction_interval
+ 
++# NOTE: LeakSafeTargetEncoder (src/pipeline_components.py) is never referenced
++# directly here, but must remain importable from that exact module path --
++# joblib resolves pickled custom transformers by (module, qualname), not by
++# whatever happens to be imported in this file's namespace.
+ 
+ app = FastAPI(title="Mercari Price Prediction API")
+ 
+ # Loaded ONCE at server startup, not per-request -- reused for every prediction
+ pipeline = joblib.load("models/mercari_pipeline_final.joblib")
++interval_lookup = joblib.load("models/interval_lookup.joblib")
+ 
+ 
+ @app.get("/health")
+-def health_check():
++def health_check() -> dict[str, str]:
+     return {"status": "ok"}
+ 
+ 
+@@ -23,22 +28,21 @@ class ListingInput(BaseModel):
+     name: str = Field(..., min_length=1, description="Listing title")
+     item_condition_id: int = Field(..., ge=1, le=5, description="1=New, 5=Poor")
+     category_name: str = Field(..., min_length=1, description="e.g. Women/Bags/Shoulder Bag")
+-    brand_name: Optional[str] = Field(default=None, description="Brand, if any")
++    brand_name: str | None = Field(default=None, description="Brand, if any")
+     shipping: int = Field(..., ge=0, le=1, description="1 if seller pays shipping")
+-    item_description: Optional[str] = Field(default=None, description="Listing description")
+-
+-
++    item_description: str | None = Field(default=None, description="Listing description")
+ 
+-from src.interval_utils import get_prediction_interval
+ 
+-# Loaded once at startup -- same pattern as the model pipeline
+-interval_lookup = joblib.load("models/interval_lookup.joblib")
++class PredictionResponse(BaseModel):
++    predicted_price: float
++    price_range_low: float
++    price_range_high: float
+ 
+ 
+-@app.post("/predict")
+-def predict_price(listing: ListingInput):
++@app.post("/predict", response_model=PredictionResponse)
++def predict_price(listing: ListingInput) -> PredictionResponse:
+     raw_df = pd.DataFrame([listing.model_dump()])
+-    raw_df["price"] = 0
++    raw_df["price"] = 0  # unused by transform(); see README Known Limitations #1
+ 
+     engineered_df = engineer_raw_features(raw_df)
+     pred_log = pipeline.predict(engineered_df)[0]
+@@ -48,8 +52,8 @@ def predict_price(listing: ListingInput):
+         pred_log, interval_lookup["bin_edges"], interval_lookup["bin_bounds"]
+     )
+ 
+-    return {
+-        "predicted_price": round(pred_price, 2),
+-        "price_range_low": round(lower, 2),
+-        "price_range_high": round(upper, 2)
+-    }
+\ No newline at end of file
++    return PredictionResponse(
++        predicted_price=round(pred_price, 2),
++        price_range_low=round(lower, 2),
++        price_range_high=round(upper, 2),
++    )
+diff --git a/pyproject.toml b/pyproject.toml
+new file mode 100644
+index 0000000..688e604
+--- /dev/null
++++ b/pyproject.toml
+@@ -0,0 +1,12 @@
++[tool.ruff]
++line-length = 100
++target-version = "py311"
++exclude = ["notebooks"]
++
++[tool.ruff.lint]
++select = ["E", "F", "I", "W", "UP", "B"]
++
++[tool.black]
++line-length = 100
++target-version = ["py311"]
++extend-exclude = "notebooks"
+diff --git a/render.yaml b/render.yaml
+new file mode 100644
+index 0000000..68f9077
+--- /dev/null
++++ b/render.yaml
+@@ -0,0 +1,10 @@
++services:
++  - type: web
++    name: mercari-price-prediction-api
++    runtime: docker
++    dockerfilePath: ./Dockerfile
++    plan: free
++    healthCheckPath: /health
++    envVars:
++      - key: PORT
++        value: 8000
+diff --git a/scripts/cross_validate_final_model.py b/scripts/cross_validate_final_model.py
+new file mode 100644
+index 0000000..c5987d5
+--- /dev/null
++++ b/scripts/cross_validate_final_model.py
+@@ -0,0 +1,123 @@
++"""
++Cross-validates the SHIPPED Ridge+text pipeline (the one saved to
++models/mercari_pipeline_final.joblib), not just the tree-model candidates.
++
++Why this exists: the README's model-comparison table reports 5-fold CV RMSLE
++for XGBoost and LightGBM, but the final chosen Ridge+text model was only
++evaluated on a single train/val split (0.5214). This closes that gap so the
++headline number has the same statistical footing as the numbers it's being
++compared against.
++
++Usage (from repo root, after running src/data_prep.py so data/processed/
++exists):
++    python scripts/cross_validate_final_model.py
++
++Requires data/processed/train.csv, which requires the raw Kaggle dataset --
++neither ships with the repo (see Getting Started in the README), so this
++must be run locally with the data in place. It is not run in CI.
++"""
++
++import sys
++import time
++from pathlib import Path
++
++import numpy as np
++import pandas as pd
++from sklearn.compose import ColumnTransformer
++from sklearn.feature_extraction.text import TfidfVectorizer
++from sklearn.linear_model import Ridge
++from sklearn.metrics import mean_squared_error
++from sklearn.model_selection import KFold
++from sklearn.pipeline import Pipeline
++from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, StandardScaler
++
++sys.path.append(str(Path(__file__).resolve().parent.parent))
++from src.pipeline_components import LeakSafeTargetEncoder, fillna_cat, fillna_text
++
++RANDOM_STATE = 42
++N_FOLDS = 5
++
++NUM_COLS = [
++    "item_condition_id",
++    "shipping",
++    "category_depth",
++    "name_length",
++    "desc_length",
++    "name_word_count",
++    "has_description",
++    "is_branded",
++]
++CAT_COLS = ["main_category", "sub_category", "sub_sub_category", "condition_label"]
++
++
++def build_pipeline() -> Pipeline:
++    """Reconstructs the exact architecture from notebooks/pipeline.ipynb."""
++    name_pipe = Pipeline(
++        [
++            ("fillna", FunctionTransformer(fillna_text)),
++            ("tfidf", TfidfVectorizer(max_features=5000, ngram_range=(1, 2), min_df=2)),
++        ]
++    )
++    desc_pipe = Pipeline(
++        [
++            ("fillna", FunctionTransformer(fillna_text)),
++            ("tfidf", TfidfVectorizer(max_features=20000, ngram_range=(1, 2), min_df=2)),
++        ]
++    )
++    cat_pipe = Pipeline(
++        [
++            ("fillna", FunctionTransformer(fillna_cat)),
++            ("ohe", OneHotEncoder(handle_unknown="ignore")),
++        ]
++    )
++
++    preprocessor = ColumnTransformer(
++        [
++            ("name_tfidf", name_pipe, "name"),
++            ("desc_tfidf", desc_pipe, "item_description"),
++            ("num", StandardScaler(), NUM_COLS),
++            ("cat", cat_pipe, CAT_COLS),
++            ("cat_enc", LeakSafeTargetEncoder("main_category"), ["main_category", "price"]),
++            ("brand_enc", LeakSafeTargetEncoder("brand_name"), ["brand_name", "price"]),
++        ]
++    )
++    return Pipeline(
++        [("preprocess", preprocessor), ("model", Ridge(alpha=5.0, random_state=RANDOM_STATE))]
++    )
++
++
++def main() -> None:
++    data_path = Path("data/processed/train.csv")
++    if not data_path.exists():
++        raise SystemExit(
++            f"{data_path} not found. Run src/data_prep.py against the raw Kaggle "
++            "dataset first (see README > Getting Started)."
++        )
++
++    df = pd.read_csv(data_path)
++    y = df["log_price"]
++
++    kf = KFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_STATE)
++    fold_scores = []
++
++    for fold_idx, (train_idx, val_idx) in enumerate(kf.split(df), start=1):
++        t0 = time.time()
++        fold_train, fold_val = df.iloc[train_idx], df.iloc[val_idx]
++
++        pipeline = build_pipeline()
++        pipeline.fit(fold_train, y.iloc[train_idx])
++        pred = pipeline.predict(fold_val)
++
++        rmsle = float(np.sqrt(mean_squared_error(y.iloc[val_idx], pred)))
++        fold_scores.append(rmsle)
++        print(f"[fold {fold_idx}/{N_FOLDS}] RMSLE={rmsle:.4f}  ({time.time() - t0:.1f}s)")
++
++    fold_scores = np.array(fold_scores)
++    print(f"\nFinal Ridge+text pipeline: {fold_scores.mean():.4f} +/- {fold_scores.std():.4f}")
++    print(
++        "Paste this into the README's model-comparison table alongside the tree-model CV numbers."
++    )
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/src/data_prep.py b/src/data_prep.py
+index ef39111..f22abed 100644
+--- a/src/data_prep.py
++++ b/src/data_prep.py
+@@ -1,14 +1,15 @@
+ import os
++
+ import numpy as np
+ import pandas as pd
+-from sklearn.model_selection import train_test_split, KFold
++from sklearn.model_selection import KFold, train_test_split
+ 
+ RANDOM_STATE = 42
+-SMOOTHING = 10      # shrinkage strength toward global mean for low-count groups
++SMOOTHING = 10  # shrinkage strength toward global mean for low-count groups
+ N_FOLDS = 5
+ 
+ # ---------------------------------------------------------------------------
+-# 1. Load raw + replay cleaning 
++# 1. Load raw + replay cleaning
+ # ---------------------------------------------------------------------------
+ df = pd.read_csv("data/raw/mercari_sample.csv")
+ 
+@@ -24,16 +25,16 @@ print(f"[1] Clean shape: {df.shape[0]:,} rows x {df.shape[1]} columns")
+ #    zero dependency on price, so these are 100% safe to build pre-split.
+ # ---------------------------------------------------------------------------
+ cat_split = df["category_name"].str.split("/")
+-df["main_category"]    = cat_split.str[0]
+-df["sub_category"]     = cat_split.str[1]
++df["main_category"] = cat_split.str[0]
++df["sub_category"] = cat_split.str[1]
+ df["sub_sub_category"] = cat_split.str[2]
+-df["category_depth"]   = df["category_name"].str.split("/").str.len()
++df["category_depth"] = df["category_name"].str.split("/").str.len()
+ 
+-df["name_length"]     = df["name"].str.len()
+-df["desc_length"]     = df["item_description"].str.len()
++df["name_length"] = df["name"].str.len()
++df["desc_length"] = df["item_description"].str.len()
+ df["name_word_count"] = df["name"].str.split().str.len()
+ df["has_description"] = df["item_description"].ne("No description yet").astype(int)
+-df["is_branded"]      = np.where(df["brand_name"] == "no brand", 0, 1)
++df["is_branded"] = np.where(df["brand_name"] == "no brand", 0, 1)
+ 
+ condition_map = {1: "New", 2: "Like New", 3: "Good", 4: "Fair", 5: "Poor"}
+ df["condition_label"] = df["item_condition_id"].map(condition_map)
+@@ -69,13 +70,24 @@ print(f"[5] Train: {train_df.shape[0]:,} rows | Val: {val_df.shape[0]:,} rows")
+ # ---------------------------------------------------------------------------
+ global_mean_price = train_df["price"].mean()
+ 
+-def smoothed_group_stats(frame, group_col, target_col="price", m=SMOOTHING, global_mean=global_mean_price):
++
++def smoothed_group_stats(
++    frame, group_col, target_col="price", m=SMOOTHING, global_mean=global_mean_price
++):
+     stats = frame.groupby(group_col)[target_col].agg(["mean", "count"])
+     stats["smoothed"] = (stats["count"] * stats["mean"] + m * global_mean) / (stats["count"] + m)
+     return stats["smoothed"]
+ 
+-def oof_target_encode(train_frame, group_col, target_col="price", n_folds=N_FOLDS,
+-                       m=SMOOTHING, global_mean=global_mean_price, random_state=RANDOM_STATE):
++
++def oof_target_encode(
++    train_frame,
++    group_col,
++    target_col="price",
++    n_folds=N_FOLDS,
++    m=SMOOTHING,
++    global_mean=global_mean_price,
++    random_state=RANDOM_STATE,
++):
+     oof_encoded = pd.Series(index=train_frame.index, dtype=float)
+     kf = KFold(n_splits=n_folds, shuffle=True, random_state=random_state)
+     for fold_train_idx, fold_holdout_idx in kf.split(train_frame):
+@@ -85,13 +97,14 @@ def oof_target_encode(train_frame, group_col, target_col="price", n_folds=N_FOLD
+         oof_encoded.iloc[fold_holdout_idx] = holdout_groups.map(stats_map).fillna(global_mean)
+     return oof_encoded
+ 
+-train_df["cat_avg_price"]   = oof_target_encode(train_df, "main_category")
++
++train_df["cat_avg_price"] = oof_target_encode(train_df, "main_category")
+ train_df["brand_avg_price"] = oof_target_encode(train_df, "brand_name")
+ 
+-final_cat_map   = smoothed_group_stats(train_df, "main_category")
++final_cat_map = smoothed_group_stats(train_df, "main_category")
+ final_brand_map = smoothed_group_stats(train_df, "brand_name")
+ 
+-val_df["cat_avg_price"]   = val_df["main_category"].map(final_cat_map).fillna(global_mean_price)
++val_df["cat_avg_price"] = val_df["main_category"].map(final_cat_map).fillna(global_mean_price)
+ val_df["brand_avg_price"] = val_df["brand_name"].map(final_brand_map).fillna(global_mean_price)
+ 
+ print("[6] Leak-safe target encoding done (OOF for train, train-only map for val).")
+@@ -118,7 +131,7 @@ print("Val:  ", val_df["price_bin"].value_counts(normalize=True).sort_index().ro
+ #     never created here -- we don't even build features we can't use)
+ # ---------------------------------------------------------------------------
+ y_train = train_df["log_price"].copy()
+-y_val   = val_df["log_price"].copy()
++y_val = val_df["log_price"].copy()
+ 
+ # ---------------------------------------------------------------------------
+ # 9. Save processed, leak-safe artifacts
+diff --git a/src/feature_engineering.py b/src/feature_engineering.py
+index fefeb7c..cb86faf 100644
+--- a/src/feature_engineering.py
++++ b/src/feature_engineering.py
+@@ -28,15 +28,29 @@ def engineer_raw_features(df):
+ 
+ 
+ if __name__ == "__main__":
+-    sample_raw = pd.DataFrame([{
+-        "name": "Chanel Classic Flag Bag medium Caviar L",
+-        "item_condition_id": 3,
+-        "category_name": "Women/Bags/Shoulder Bag",
+-        "brand_name": "Chanel",
+-        "shipping": 0,
+-        "item_description": "Barely used, comes with dust bag"
+-    }])
++    sample_raw = pd.DataFrame(
++        [
++            {
++                "name": "Chanel Classic Flag Bag medium Caviar L",
++                "item_condition_id": 3,
++                "category_name": "Women/Bags/Shoulder Bag",
++                "brand_name": "Chanel",
++                "shipping": 0,
++                "item_description": "Barely used, comes with dust bag",
++            }
++        ]
++    )
+ 
+     engineered = engineer_raw_features(sample_raw)
+-    print(engineered[["main_category", "sub_category", "sub_sub_category",
+-                       "condition_label", "name_length", "desc_length"]])
+\ No newline at end of file
++    print(
++        engineered[
++            [
++                "main_category",
++                "sub_category",
++                "sub_sub_category",
++                "condition_label",
++                "name_length",
++                "desc_length",
++            ]
++        ]
++    )
+diff --git a/src/interval_utils.py b/src/interval_utils.py
+index 002f99f..37f0b6e 100644
+--- a/src/interval_utils.py
++++ b/src/interval_utils.py
+@@ -1,16 +1,20 @@
++from collections.abc import Sequence
++
+ import numpy as np
+ 
+-def get_prediction_interval(pred_log, bin_edges, bin_bounds):
++
++def get_prediction_interval(
++    pred_log: float,
++    bin_edges: Sequence[float],
++    bin_bounds: Sequence[tuple[float, float]],
++) -> tuple[float, float]:
+     """Given a point prediction (log-space) and pre-computed bin boundaries,
+     return a (lower_price, upper_price) dollar interval."""
+     bin_idx = np.digitize(pred_log, bin_edges[1:-1])
+-    bin_idx = min(bin_idx, len(bin_bounds) - 1) # clip if beyond the last known bin
+-
+-    lower_pct, upper_pct = bin_bounds[bin_idx]
+-    lower_log = pred_log + lower_pct
+-    upper_pct = pred_log + upper_pct
+-
+-
+-    return float(np.expm1(lower_log)), float(np.expm1(upper_pct))
++    bin_idx = min(bin_idx, len(bin_bounds) - 1)  # clip if beyond the last known bin
+ 
++    lower_offset, upper_offset = bin_bounds[bin_idx]
++    lower_log = pred_log + lower_offset
++    upper_log = pred_log + upper_offset
+ 
++    return float(np.expm1(lower_log)), float(np.expm1(upper_log))
+diff --git a/src/pipeline_components.py b/src/pipeline_components.py
+index b7dc601..dde5c60 100644
+--- a/src/pipeline_components.py
++++ b/src/pipeline_components.py
+@@ -1,4 +1,3 @@
+-import pandas as pd
+ from sklearn.base import BaseEstimator, TransformerMixin
+ 
+ 
+@@ -18,10 +17,12 @@ class LeakSafeTargetEncoder(BaseEstimator, TransformerMixin):
+     def fit(self, X, y=None):
+         self.global_mean_ = X["price"].mean()
+         stats = X.groupby(self.group_col)["price"].agg(["mean", "count"])
+-        stats["smoothed"] = (stats["count"] * stats["mean"] + self.smoothing * self.global_mean_) / (stats["count"] + self.smoothing)
++        stats["smoothed"] = (
++            stats["count"] * stats["mean"] + self.smoothing * self.global_mean_
++        ) / (stats["count"] + self.smoothing)
+         self.mapping_ = stats["smoothed"]
+         return self
+ 
+     def transform(self, X):
+         encoded = X[self.group_col].map(self.mapping_).fillna(self.global_mean_)
+-        return encoded.to_numpy().reshape(-1, 1)
+\ No newline at end of file
++        return encoded.to_numpy().reshape(-1, 1)
+diff --git a/streamlit_app/app.py b/streamlit_app/app.py
+index 35934ba..546c56e 100644
+--- a/streamlit_app/app.py
++++ b/streamlit_app/app.py
+@@ -1,15 +1,20 @@
+-import sys
+ import os
++import sys
+ 
+ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+-import streamlit as st
+-import pandas as pd
+-import numpy as np
++
+ import joblib
++import numpy as np
++import pandas as pd
++import streamlit as st
++
+ from src.feature_engineering import engineer_raw_features
+-from src.pipeline_components import fillna_text, fillna_cat, LeakSafeTargetEncoder
+ from src.interval_utils import get_prediction_interval
+ 
++# NOTE: LeakSafeTargetEncoder (src/pipeline_components.py) is never referenced
++# directly here, but must remain importable from that exact module path --
++# joblib resolves pickled custom transformers by (module, qualname).
++
+ 
+ st.set_page_config(page_title="Mercari Price Prediction", page_icon="🛍️")
+ 
+@@ -24,7 +29,9 @@ def load_artifacts():
+ pipeline, interval_lookup = load_artifacts()
+ 
+ st.title("Mercari Price Prediction")
+-st.write("Enter listing details to get an AI-suggested price, trained on real Mercari marketplace data.")
++st.write(
++    "Enter listing details to get an AI-suggested price, trained on real Mercari marketplace data."
++)
+ 
+ name = st.text_input("Item Name", placeholder="e.g. Chanel Classic Flag Bag")
+ item_condition_id = st.slider("Condition (1=New, 5=Poor)", 1, 5, 3)
+@@ -34,21 +41,27 @@ shipping = st.radio("Shipping paid by seller?", [0, 1], horizontal=True)
+ item_description = st.text_area("Description (optional)")
+ 
+ if st.button("Predict Price"):
+-    raw_df = pd.DataFrame([{
+-        "name": name,
+-        "item_condition_id": item_condition_id,
+-        "category_name": category_name,
+-        "brand_name": brand_name if brand_name else None,
+-        "shipping": shipping,
+-        "item_description": item_description if item_description else None
+-    }])
++    raw_df = pd.DataFrame(
++        [
++            {
++                "name": name,
++                "item_condition_id": item_condition_id,
++                "category_name": category_name,
++                "brand_name": brand_name if brand_name else None,
++                "shipping": shipping,
++                "item_description": item_description if item_description else None,
++            }
++        ]
++    )
+     raw_df["price"] = 0
+ 
+     engineered_df = engineer_raw_features(raw_df)
+     pred_log = pipeline.predict(engineered_df)[0]
+     pred_price = float(np.expm1(pred_log))
+-    lower, upper = get_prediction_interval(pred_log, interval_lookup["bin_edges"], interval_lookup["bin_bounds"])
++    lower, upper = get_prediction_interval(
++        pred_log, interval_lookup["bin_edges"], interval_lookup["bin_bounds"]
++    )
+ 
+     col1, col2 = st.columns(2)
+     col1.metric("Predicted Price", f"${pred_price:.2f}")
+-    col2.metric("Likely Range", f"${lower:.2f} - ${upper:.2f}")
+\ No newline at end of file
++    col2.metric("Likely Range", f"${lower:.2f} - ${upper:.2f}")
+diff --git a/tests/test_api.py b/tests/test_api.py
+index 1c75ebc..7b6bb27 100644
+--- a/tests/test_api.py
++++ b/tests/test_api.py
+@@ -1,4 +1,5 @@
+ from fastapi.testclient import TestClient
++
+ from api.main import app
+ 
+ client = TestClient(app)
+@@ -17,7 +18,7 @@ def test_predict_valid_request():
+         "category_name": "Women/Bags/Shoulder Bag",
+         "brand_name": "Chanel",
+         "shipping": 0,
+-        "item_description": "Barely used, comes with dust bag"
++        "item_description": "Barely used, comes with dust bag",
+     }
+     response = client.post("/predict", json=payload)
+     assert response.status_code == 200
+@@ -30,8 +31,10 @@ def test_predict_valid_request():
+ 
+ def test_predict_invalid_condition_id():
+     payload = {
+-        "name": "Test Item", "item_condition_id": 47,
+-        "category_name": "Women/Bags/Shoulder Bag", "shipping": 0
++        "name": "Test Item",
++        "item_condition_id": 47,
++        "category_name": "Women/Bags/Shoulder Bag",
++        "shipping": 0,
+     }
+     response = client.post("/predict", json=payload)
+     assert response.status_code == 422
+@@ -40,7 +43,8 @@ def test_predict_invalid_condition_id():
+ def test_predict_missing_required_field():
+     payload = {
+         "item_condition_id": 3,
+-        "category_name": "Women/Bags/Shoulder Bag", "shipping": 0
++        "category_name": "Women/Bags/Shoulder Bag",
++        "shipping": 0,
+     }  # "name" missing
+     response = client.post("/predict", json=payload)
+     assert response.status_code == 422
+@@ -48,9 +52,11 @@ def test_predict_missing_required_field():
+ 
+ def test_predict_without_optional_fields():
+     payload = {
+-        "name": "Generic Item", "item_condition_id": 3,
+-        "category_name": "Electronics/Phones", "shipping": 1
++        "name": "Generic Item",
++        "item_condition_id": 3,
++        "category_name": "Electronics/Phones",
++        "shipping": 1,
+     }  # brand_name aur item_description dono missing
+     response = client.post("/predict", json=payload)
+     assert response.status_code == 200
+-    assert "predicted_price" in response.json()
+\ No newline at end of file
++    assert "predicted_price" in response.json()
+diff --git a/tests/test_edge_cases.py b/tests/test_edge_cases.py
+index 1b531e9..bee19de 100644
+--- a/tests/test_edge_cases.py
++++ b/tests/test_edge_cases.py
+@@ -1,4 +1,5 @@
+ from fastapi.testclient import TestClient
++
+ from api.main import app
+ 
+ client = TestClient(app)
+@@ -8,10 +9,12 @@ def test_unseen_brand_does_not_crash():
+     """Day 1/10: brands never seen in training should fall back to the global mean,
+     not crash -- this is the exact leak-safe encoding behavior we built."""
+     payload = {
+-        "name": "Mystery Item", "item_condition_id": 3,
++        "name": "Mystery Item",
++        "item_condition_id": 3,
+         "category_name": "Women/Bags/Shoulder Bag",
+         "brand_name": "TotallyMadeUpBrandXYZ123",
+-        "shipping": 0, "item_description": "test"
++        "shipping": 0,
++        "item_description": "test",
+     }
+     response = client.post("/predict", json=payload)
+     assert response.status_code == 200
+@@ -22,9 +25,10 @@ def test_unseen_category_does_not_crash():
+     """Day 3/6: OneHotEncoder(handle_unknown='ignore') should silently zero-encode
+     a category never seen in training, not crash."""
+     payload = {
+-        "name": "Mystery Item", "item_condition_id": 3,
++        "name": "Mystery Item",
++        "item_condition_id": 3,
+         "category_name": "TotallyNewCategory/Nonexistent/Subcategory",
+-        "shipping": 0
++        "shipping": 0,
+     }
+     response = client.post("/predict", json=payload)
+     assert response.status_code == 200
+@@ -52,9 +56,11 @@ def test_empty_string_description():
+     """An empty string differs from a missing field -- confirm it's handled
+     like 'no description', not a crash on empty text."""
+     payload = {
+-        "name": "Test Item", "item_condition_id": 3,
+-        "category_name": "Electronics/Phones", "shipping": 0,
+-        "item_description": ""
++        "name": "Test Item",
++        "item_condition_id": 3,
++        "category_name": "Electronics/Phones",
++        "shipping": 0,
++        "item_description": "",
+     }
+     response = client.post("/predict", json=payload)
+-    assert response.status_code == 200
+\ No newline at end of file
++    assert response.status_code == 200
+diff --git a/tests/test_feature_engineering.py b/tests/test_feature_engineering.py
+index dfe6650..502c9ef 100644
+--- a/tests/test_feature_engineering.py
++++ b/tests/test_feature_engineering.py
+@@ -1,13 +1,21 @@
+ import pandas as pd
++
+ from src.feature_engineering import engineer_raw_features
+ 
+ 
+ def test_category_split_three_levels():
+-    df = pd.DataFrame([{
+-        "name": "Test Item", "item_condition_id": 1,
+-        "category_name": "Women/Bags/Shoulder Bag", "brand_name": "Chanel",
+-        "shipping": 0, "item_description": "test desc"
+-    }])
++    df = pd.DataFrame(
++        [
++            {
++                "name": "Test Item",
++                "item_condition_id": 1,
++                "category_name": "Women/Bags/Shoulder Bag",
++                "brand_name": "Chanel",
++                "shipping": 0,
++                "item_description": "test desc",
++            }
++        ]
++    )
+     result = engineer_raw_features(df)
+     assert result.loc[0, "main_category"] == "Women"
+     assert result.loc[0, "sub_category"] == "Bags"
+@@ -15,32 +23,53 @@ def test_category_split_three_levels():
+ 
+ 
+ def test_missing_brand_defaults_to_no_brand():
+-    df = pd.DataFrame([{
+-        "name": "Test Item", "item_condition_id": 1,
+-        "category_name": "Women/Bags/Shoulder Bag", "brand_name": None,
+-        "shipping": 0, "item_description": "test desc"
+-    }])
++    df = pd.DataFrame(
++        [
++            {
++                "name": "Test Item",
++                "item_condition_id": 1,
++                "category_name": "Women/Bags/Shoulder Bag",
++                "brand_name": None,
++                "shipping": 0,
++                "item_description": "test desc",
++            }
++        ]
++    )
+     result = engineer_raw_features(df)
+     assert result.loc[0, "brand_name"] == "no brand"
+     assert result.loc[0, "is_branded"] == 0
+ 
+ 
+ def test_missing_description_flagged_correctly():
+-    df = pd.DataFrame([{
+-        "name": "Test Item", "item_condition_id": 1,
+-        "category_name": "Women/Bags/Shoulder Bag", "brand_name": "Chanel",
+-        "shipping": 0, "item_description": None
+-    }])
++    df = pd.DataFrame(
++        [
++            {
++                "name": "Test Item",
++                "item_condition_id": 1,
++                "category_name": "Women/Bags/Shoulder Bag",
++                "brand_name": "Chanel",
++                "shipping": 0,
++                "item_description": None,
++            }
++        ]
++    )
+     result = engineer_raw_features(df)
+     assert result.loc[0, "has_description"] == 0
+     assert result.loc[0, "item_description"] == "No description yet"
+ 
+ 
+ def test_condition_label_mapping():
+-    df = pd.DataFrame([{
+-        "name": "Test Item", "item_condition_id": 1,
+-        "category_name": "Electronics/Phones", "brand_name": "Apple",
+-        "shipping": 1, "item_description": "test"
+-    }])
++    df = pd.DataFrame(
++        [
++            {
++                "name": "Test Item",
++                "item_condition_id": 1,
++                "category_name": "Electronics/Phones",
++                "brand_name": "Apple",
++                "shipping": 1,
++                "item_description": "test",
++            }
++        ]
++    )
+     result = engineer_raw_features(df)
+-    assert result.loc[0, "condition_label"] == "New"
+\ No newline at end of file
++    assert result.loc[0, "condition_label"] == "New"
