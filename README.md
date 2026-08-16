@@ -18,6 +18,8 @@
 
 **🔗 [Live demo](https://YOUR-APP.streamlit.app) · [API docs](https://YOUR-API.onrender.com/docs)** — replace with your deployed URLs (see [Deployment](#deployment))
 
+![Demo prediction](docs/demo.png)
+
 </div>
 
 ---
